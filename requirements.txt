@@ -14,7 +14,7 @@ tqdm>=4.66
 PyYAML>=6.0
 
 # JAX core. This CPU install is portable; replace or upgrade with jax[cuda12]/jax[cuda13] for GPU.
-jax[cuda12]>=0.4.30
+jax>=0.4.30
 jaxlib>=0.4.30
 jaxopt>=0.8.3
 optax>=0.2.2
