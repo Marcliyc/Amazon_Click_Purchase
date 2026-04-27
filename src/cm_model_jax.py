@@ -36,7 +36,8 @@ def _params_from_theta(theta: jnp.ndarray) -> jnp.ndarray:
     k = jnp.exp(jnp.clip(theta[2], -5.0, 5.0))
     r_tau = softplus(theta[3]) + 1e-6
     psi = theta[4]
-    pi = jnp.clip(sigmoid(theta[5]), 1e-6, 1.0 - 1e-6)
+    #pi = jnp.clip(sigmoid(theta[5]), 1e-6, 1.0 - 1e-6)
+    pi = jnp.clip(theta[5], 0.05, 0.97)
     return jnp.array([r_v, mu0, k, r_tau, psi, pi])
 
 
@@ -144,15 +145,17 @@ def fit_cm_model_jax(visits_cal: pd.DataFrame, n_starts: int = 30, seed: int = 1
         _, g = value_grad(jnp.asarray(theta_np))
         return np.asarray(g, dtype=float)
 
-    for _ in range(n_starts):
+    for i in range(n_starts):
+        print(f"CM fit {i} start", flush=True)
         pi0 = np.clip(ever_purchase, 0.05, 0.95)
         x0 = np.array([
-            rng.normal(-1, 1),
-            rng.normal(-1, 1),
+            rng.normal(1, 1),
+            rng.normal(1, 1),
             rng.normal(0, 0.2),
             rng.normal(1.5, 1),
             rng.normal(0, 0.2),
-            np.log(pi0 / (1 - pi0)),
+            rng.normal(0.8, 0.1),
+            #np.log(pi0 / (1 - pi0)),
         ])
         res = minimize(fun=fun, x0=x0, jac=jac, method="L-BFGS-B")
         if best is None or res.fun < best.fun:

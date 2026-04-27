@@ -51,13 +51,15 @@ def main(args=None):
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    raw = load_raw_data(args.input)
-    session = make_session_visits(raw)
-    visits = make_daily_visits(session) if args.visit_unit == "daily" else make_session_time_visits(session)
+    # raw = load_raw_data(args.input)
+    # session = make_session_visits(raw)
+    # visits = make_daily_visits(session) if args.visit_unit == "daily" else make_session_time_visits(session)
+    # visits.to_csv(out_dir / "processed_visits.csv", index=False)
+    visits = pd.read_csv("report/evcm_jax/processed_visits.csv")
 
-    if args.max_machines:
-        keep = visits["machine_id"].drop_duplicates().head(args.max_machines)
-        visits = visits[visits["machine_id"].isin(keep)]
+    # if args.max_machines:
+    #     keep = visits["machine_id"].drop_duplicates().head(args.max_machines)
+    #     visits = visits[visits["machine_id"].isin(keep)]
 
     cal, hold, split = split_calibration_holdout(visits, cutoff=args.cutoff, calibration_fraction=args.calib_frac)
     cal_machines = set(cal["machine_id"].unique())
@@ -67,19 +69,29 @@ def main(args=None):
     T_cal_end = float(cal["t"].max()) if len(cal) else 0.0
     T_holdout_end = float(visits["t"].max()) if len(visits) else T_cal_end
 
+    print(f"Calibration period: 0 to {T_cal_end:.2f} (n={len(cal)})")
+    print(f"Holdout period: {T_cal_end:.2f} to {T_holdout_end:.2f} (n={len(hold_known)})")
+
     if args.engine == "jax":
         fit_ev_fn, fit_cm_fn, sim_fn = _jax_components(enable_x64=args.x64)
     else:
         fit_ev_fn, fit_cm_fn, sim_fn = fit_ev_model, fit_cm_model, simulate_evcm_forecast
 
+    print("Fitting EV model...")
+
     ev_params, ev_info = fit_ev_fn(cal, T_cal_end, n_starts=args.ev_starts, seed=args.seed)
     cm_params, cm_info = fit_cm_fn(cal, n_starts=args.cm_starts, seed=args.seed)
+    pd.DataFrame({"param": ["r", "alpha", "s", "beta"], "value": [ev_params.r, ev_params.alpha, ev_params.s, ev_params.beta]}).to_csv(out_dir / "params_ev.csv", index=False)
+    pd.DataFrame({"param": ["r_v", "mu0", "k", "r_tau", "psi", "pi"], "value": [cm_params.r_v, cm_params.mu0, cm_params.k, cm_params.r_tau, cm_params.psi, cm_params.pi]}).to_csv(out_dir / "params_cm.csv", index=False)
 
+
+    print("Evaluating log-likelihoods...")
     ll_ev_cal = ev_loglik(cal, T_cal_end, ev_params)
     ll_cm_cal = cm_loglik(cal, cm_params)
     ll_ev_hold = ev_holdout_loglik(cal, hold_known, T_cal_end, T_holdout_end, ev_params)
     ll_cm_hold = cm_holdout_loglik(cal, hold_known, cm_params)
 
+    print("Simulating forecasts...")
     sim = sim_fn(cal, T_cal_end, T_holdout_end, ev_params, cm_params, n_sims=args.n_sims, freq=args.freq, seed=args.seed)
     actual = aggregate_actual_holdout(hold_known, T_cal_end, T_holdout_end, freq=args.freq)
     by_period = actual.merge(sim, on=["period_idx", "period_start_t", "period_end_t"], how="left")
@@ -91,8 +103,6 @@ def main(args=None):
     ic = information_criteria(joint_ll, k=10, n=n_ev + n_cm)
 
     by_period.to_csv(out_dir / "forecast_by_period.csv", index=False)
-    pd.DataFrame({"param": ["r", "alpha", "s", "beta"], "value": [ev_params.r, ev_params.alpha, ev_params.s, ev_params.beta]}).to_csv(out_dir / "params_ev.csv", index=False)
-    pd.DataFrame({"param": ["r_v", "mu0", "k", "r_tau", "psi", "pi"], "value": [cm_params.r_v, cm_params.mu0, cm_params.k, cm_params.r_tau, cm_params.psi, cm_params.pi]}).to_csv(out_dir / "params_cm.csv", index=False)
 
     metrics = {
         "data": {

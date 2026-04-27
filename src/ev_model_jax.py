@@ -98,7 +98,8 @@ def fit_ev_model_jax(visits_cal: pd.DataFrame, T_cal_end: float, n_starts: int =
         _, g = value_grad(jnp.asarray(theta_np))
         return np.asarray(g, dtype=float)
 
-    for _ in range(n_starts):
+    for i in range(n_starts):
+        print(f"EV fit {i} start", flush=True)
         x0 = rng.normal(0, 1, 4)
         res = minimize(fun=fun, x0=x0, jac=jac, method="L-BFGS-B")
         if best is None or res.fun < best.fun:
