@@ -1,0 +1,4 @@
+period_idx,period_start_t,period_end_t,actual_purchases,actual_cum_purchases,forecast_mean_purchases,forecast_p05_purchases,forecast_p50_purchases,forecast_p95_purchases,forecast_mean_cum_purchases,forecast_p05_cum_purchases,forecast_p50_cum_purchases,forecast_p95_cum_purchases,ape_cumulative
+0,15.0,22.0,0,0,0.4,0.0,0.0,1.549999999999999,0.4,0.0,0.0,1.549999999999999,0.4
+1,22.0,29.0,0,0,0.2,0.0,0.0,1.0,0.6000000000000001,0.0,0.0,2.549999999999999,0.6000000000000001
+2,29.0,36.0,0,0,0.0,0.0,0.0,0.0,0.6000000000000001,0.0,0.0,2.549999999999999,0.6000000000000001
