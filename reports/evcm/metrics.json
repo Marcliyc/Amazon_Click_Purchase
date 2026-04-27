@@ -1,0 +1,48 @@
+{
+  "data": {
+    "n_raw_rows": 50722,
+    "n_session_visits": 50647,
+    "n_daily_visits": 715,
+    "n_machines_total": 200,
+    "n_machines_calibration": 143,
+    "n_machines_holdout_known": 76,
+    "n_machines_holdout_new": 57,
+    "calibration_start": "2024-01-01",
+    "calibration_end": "2024-01-16",
+    "holdout_end": "2024-01-31",
+    "new_machine_holdout_purchases": 2.0
+  },
+  "fit": {
+    "LL_EV_cal": -617.1611850420164,
+    "LL_CM_cal": -5.9593434385070365,
+    "LL_joint_cal": -623.1205284805235,
+    "LL_EV_holdout": -698.8947743358832,
+    "LL_CM_holdout": -1.9062358448820942e-06,
+    "LL_joint_holdout": -698.8947762421191,
+    "AIC_joint": 1266.241056961047,
+    "BIC_joint": 1312.652878658453,
+    "CAIC_joint": 1322.652878658453
+  },
+  "forecast": {
+    "MAPE_cumulative": 0.5333333333333333,
+    "MAE_cumulative": 0.5333333333333333,
+    "RMSE_cumulative": 0.5416025603090641,
+    "final_cumulative_error_pct": 0.6000000000000001,
+    "MAPE_incremental": 0.20000000000000004,
+    "actual_holdout_cum_purchases_final": 0.0,
+    "forecast_holdout_cum_purchases_final": 0.6000000000000001,
+    "actual_holdout_visits": 250,
+    "forecast_holdout_visits_mean": 300.1
+  },
+  "conversion": {
+    "actual_holdout_conversion_rate": 0.0,
+    "predicted_holdout_conversion_rate": 0.001999333555481506,
+    "conversion_relative_error_pct": null
+  },
+  "optimization": {
+    "ev_converged": true,
+    "cm_converged": true,
+    "ev_message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH",
+    "cm_message": "CONVERGENCE: RELATIVE REDUCTION OF F <= FACTR*EPSMCH"
+  }
+}
