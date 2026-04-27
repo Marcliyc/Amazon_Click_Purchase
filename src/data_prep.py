@@ -61,8 +61,8 @@ def make_session_visits(df: pd.DataFrame) -> pd.DataFrame:
         "purchase_row": "max",
         "pages_viewed": "max",
         "duration": "max",
-        "basket_tot": "max",
-        "prod_totprice": "sum",
+        #"basket_tot": "max",
+        #"prod_totprice": "sum",
     }
     for col in DEMOGRAPHIC_COLUMNS:
         if col in df.columns:
@@ -89,8 +89,8 @@ def make_daily_visits(session_df: pd.DataFrame) -> pd.DataFrame:
             purchase_session_count=("purchase_session_count", "sum"),
             pages_viewed=("pages_viewed", "sum"),
             duration=("duration", "sum"),
-            basket_tot=("basket_tot", "sum"),
-            prod_totprice=("prod_totprice", "sum"),
+            #basket_tot=("basket_tot", "sum"),
+            #prod_totprice=("prod_totprice", "sum"),
         )
         .sort_values(["machine_id", "visit_datetime"])
         .reset_index(drop=True)
