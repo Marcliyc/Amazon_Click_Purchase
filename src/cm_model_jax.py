@@ -9,6 +9,7 @@ import pandas as pd
 from scipy.optimize import minimize
 
 EPS = 1e-12
+MAX_EFFECT = 1e12
 
 
 @dataclass
@@ -58,7 +59,16 @@ def _geometric_visit_effect(mu0: jnp.ndarray, k: jnp.ndarray, start: jnp.ndarray
         return mu0 * n
 
     def k_not_one(_: None):
-        return mu0 * (k**start) * ((k**n) - 1.0) / (k - 1.0)
+        # Stable log-domain evaluation of:
+        #   mu0 * k**start * (k**n - 1) / (k - 1)
+        # This avoids overflow when k > 1 and start/n are large.
+        logk = jnp.log(jnp.maximum(k, EPS))
+        num = jnp.expm1(n * logk)
+        den = jnp.expm1(logk)
+        sign = jnp.sign(num) * jnp.sign(den)
+        log_abs = jnp.log(mu0 + EPS) + start * logk + jnp.log(jnp.abs(num) + EPS) - jnp.log(jnp.abs(den) + EPS)
+        effect = sign * jnp.exp(jnp.clip(log_abs, -80.0, 80.0))
+        return jnp.clip(effect, 0.0, MAX_EFFECT)
 
     return jax.lax.cond(jnp.abs(k - 1.0) < 1e-8, k_is_one, k_not_one, operand=None)
 

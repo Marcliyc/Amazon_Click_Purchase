@@ -35,3 +35,19 @@ def test_jax_fit_and_forecast_smoke():
 
     assert "forecast_mean_cum_purchases" in sim.columns
     assert len(sim) > 0
+
+
+import jax.numpy as jnp
+from src.cm_model_jax import _geometric_visit_effect
+
+
+def test_jax_geometric_effect_is_finite_for_large_histories():
+    # Regression for overflow in geometric closed form when k > 1 and history is long.
+    effect = _geometric_visit_effect(
+        mu0=jnp.asarray(0.2),
+        k=jnp.asarray(jnp.exp(5.0)),
+        start=jnp.asarray(2000.0),
+        end=jnp.asarray(2500.0),
+    )
+    assert jnp.isfinite(effect)
+    assert effect >= 0
