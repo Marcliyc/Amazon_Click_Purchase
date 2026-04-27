@@ -1,10 +1,24 @@
-numpy
-pandas
-scipy
-scikit-learn
-statsmodels
-matplotlib
-pyarrow
-tqdm
-pytest
-jupyter
+# Portable CPU-first requirements for the JAX EV/CM implementation.
+# For NVIDIA GPU acceleration, install a CUDA-enabled JAX wheel after this file, e.g.:
+#   pip install -U "jax[cuda13]"
+# or, if your driver/CUDA setup requires it:
+#   pip install -U "jax[cuda12]"
+
+numpy>=1.26
+pandas>=2.1
+pyarrow>=15.0
+scipy>=1.11
+scikit-learn>=1.4
+matplotlib>=3.8
+tqdm>=4.66
+PyYAML>=6.0
+
+# JAX core. This CPU install is portable; replace or upgrade with jax[cuda12]/jax[cuda13] for GPU.
+jax[cuda12]>=0.4.30
+jaxlib>=0.4.30
+jaxopt>=0.8.3
+optax>=0.2.2
+flax>=0.8.0
+
+pytest>=8.0
+ruff>=0.4
