@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
-from scipy.optimize import minimize
+from jaxopt import LBFGS
 
 EPS = 1e-9
 
@@ -86,30 +86,29 @@ def fit_ev_model_jax(visits_cal: pd.DataFrame, T_cal_end: float, n_starts: int =
     times = jnp.asarray(times_np)
     lengths = jnp.asarray(lengths_np)
 
-    value_grad = jax.jit(jax.value_and_grad(lambda th: -ev_loglik_jax(th, times, lengths, T_cal_end)))
+    objective = lambda th: -ev_loglik_jax(th, times, lengths, T_cal_end)
+    solver = LBFGS(fun=objective, maxiter=500, tol=1e-7)
     rng = np.random.default_rng(seed)
-    best = None
-
-    def fun(theta_np):
-        v, _ = value_grad(jnp.asarray(theta_np))
-        return float(v)
-
-    def jac(theta_np):
-        _, g = value_grad(jnp.asarray(theta_np))
-        return np.asarray(g, dtype=float)
+    best_params = None
+    best_state = None
+    best_value = np.inf
 
     for _ in range(n_starts):
         x0 = rng.normal(0, 1, 4)
-        res = minimize(fun=fun, x0=x0, jac=jac, method="L-BFGS-B")
-        if best is None or res.fun < best.fun:
-            best = res
+        params, state = solver.run(jnp.asarray(x0))
+        value = float(state.value)
+        if value < best_value:
+            best_value = value
+            best_params = params
+            best_state = state
 
-    params_arr = np.asarray(_params_from_theta(jnp.asarray(best.x)))
+    params_arr = np.asarray(_params_from_theta(best_params))
     params = EVJaxParams(*(float(v) for v in params_arr))
+    converged = bool(float(best_state.error) <= 1e-7 and int(best_state.iter_num) < 500)
     info = {
-        "converged": bool(best.success),
-        "message": str(best.message),
-        "objective": float(best.fun),
-        "nit": int(best.nit),
+        "converged": converged,
+        "message": f"jaxopt.LBFGS error={float(best_state.error):.3e}",
+        "objective": best_value,
+        "nit": int(best_state.iter_num),
     }
     return params, info
