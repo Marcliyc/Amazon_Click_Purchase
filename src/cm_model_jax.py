@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pandas as pd
+from scipy.optimize import minimize
+
+EPS = 1e-12
+
+
+@dataclass
+class CMJaxParams:
+    r_v: float
+    mu0: float
+    k: float
+    r_tau: float
+    psi: float
+    pi: float
+
+
+def softplus(x: jnp.ndarray) -> jnp.ndarray:
+    return jnp.log1p(jnp.exp(-jnp.abs(x))) + jnp.maximum(x, 0)
+
+
+def sigmoid(x: jnp.ndarray) -> jnp.ndarray:
+    return 1.0 / (1.0 + jnp.exp(-x))
+
+
+def _params_from_theta(theta: jnp.ndarray) -> jnp.ndarray:
+    r_v = softplus(theta[0]) + 1e-6
+    mu0 = softplus(theta[1]) + 1e-6
+    k = jnp.exp(jnp.clip(theta[2], -5.0, 5.0))
+    r_tau = softplus(theta[3]) + 1e-6
+    psi = theta[4]
+    pi = jnp.clip(sigmoid(theta[5]), 1e-6, 1.0 - 1e-6)
+    return jnp.array([r_v, mu0, k, r_tau, psi, pi])
+
+
+def _to_padded_sequences(visits_cal: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    groups = [g.sort_values("t")["purchase"].to_numpy(dtype=int) for _, g in visits_cal.groupby("machine_id")]
+    if not groups:
+        return np.zeros((0, 0), dtype=int), np.zeros((0,), dtype=np.int32)
+    lengths = np.asarray([len(g) for g in groups], dtype=np.int32)
+    max_len = int(lengths.max())
+    padded = np.zeros((len(groups), max_len), dtype=int)
+    for i, seq in enumerate(groups):
+        padded[i, : len(seq)] = seq
+    return padded, lengths
+
+
+def _geometric_visit_effect(mu0: jnp.ndarray, k: jnp.ndarray, start: jnp.ndarray, end: jnp.ndarray) -> jnp.ndarray:
+    n = end - start + 1
+
+    def k_is_one(_: None):
+        return mu0 * n
+
+    def k_not_one(_: None):
+        return mu0 * (k**start) * ((k**n) - 1.0) / (k - 1.0)
+
+    return jax.lax.cond(jnp.abs(k - 1.0) < 1e-8, k_is_one, k_not_one, operand=None)
+
+
+def _cm_purchase_probability(visit_idx: jnp.ndarray, prior_purchases: jnp.ndarray, last_purchase_visit_idx: jnp.ndarray, p: jnp.ndarray) -> jnp.ndarray:
+    r_v, mu0, k, r_tau, psi, pi = p
+    n_ij = visit_idx - 1
+    a_ij = r_v + _geometric_visit_effect(mu0, k, last_purchase_visit_idx + 1, visit_idx)
+    b_ij = r_tau * jnp.exp(psi * prior_purchases)
+
+    p0 = a_ij / jnp.maximum(a_ij + b_ij + n_ij, EPS)
+    no_prev = pi * p0
+    has_prev = (a_ij + prior_purchases) / jnp.maximum(a_ij + b_ij + n_ij, EPS)
+    pbuy = jnp.where(prior_purchases == 0, no_prev, has_prev)
+    return jnp.clip(pbuy, EPS, 1.0 - EPS)
+
+
+def _customer_loglik(seq_row: jnp.ndarray, n: jnp.int32, p: jnp.ndarray) -> jnp.ndarray:
+    def step(carry, y):
+        total_visits, prior_purchases, last_purchase_idx, ll = carry
+        visit_idx = total_visits + 1
+        prob = _cm_purchase_probability(visit_idx, prior_purchases, last_purchase_idx, p)
+
+        p0 = prob / jnp.maximum(p[5], EPS)
+        ll_y0 = jnp.where(
+            prior_purchases == 0,
+            jnp.log((1.0 - p[5]) + p[5] * (1.0 - p0) + EPS),
+            jnp.log(1.0 - prob + EPS),
+        )
+        ll = ll + jnp.where(y == 1, jnp.log(prob + EPS), ll_y0)
+
+        total_visits = total_visits + 1
+        bought = y == 1
+        prior_purchases = jnp.where(bought, prior_purchases + 1, prior_purchases)
+        last_purchase_idx = jnp.where(bought, total_visits, last_purchase_idx)
+        return (total_visits, prior_purchases, last_purchase_idx, ll), None
+
+    init = (jnp.array(0), jnp.array(0), jnp.array(0), jnp.array(0.0))
+
+    def step_masked(carry, inputs):
+        i, y = inputs
+        def active_step(c):
+            return step(c, y)[0]
+        new_carry = jax.lax.cond(i < n, active_step, lambda c: c, carry)
+        return new_carry, None
+
+    idx = jnp.arange(seq_row.shape[0])
+    (tv, pp, lp, ll), _ = jax.lax.scan(step_masked, init, (idx, seq_row))
+    return ll
+
+
+def cm_loglik_jax(theta: jnp.ndarray, purchases: jnp.ndarray, lengths: jnp.ndarray) -> jnp.ndarray:
+    p = _params_from_theta(theta)
+    ll_by_customer = jax.vmap(_customer_loglik, in_axes=(0, 0, None))(purchases, lengths, p)
+    return ll_by_customer.sum()
+
+
+def fit_cm_model_jax(visits_cal: pd.DataFrame, n_starts: int = 30, seed: int = 123):
+    p_np, lengths_np = _to_padded_sequences(visits_cal)
+    purchases = jnp.asarray(p_np)
+    lengths = jnp.asarray(lengths_np)
+    ever_purchase = visits_cal.groupby("machine_id")["purchase"].max().mean()
+
+    value_grad = jax.jit(jax.value_and_grad(lambda th: -cm_loglik_jax(th, purchases, lengths)))
+    rng = np.random.default_rng(seed)
+    best = None
+
+    def fun(theta_np):
+        v, _ = value_grad(jnp.asarray(theta_np))
+        return float(v)
+
+    def jac(theta_np):
+        _, g = value_grad(jnp.asarray(theta_np))
+        return np.asarray(g, dtype=float)
+
+    for _ in range(n_starts):
+        pi0 = np.clip(ever_purchase, 0.05, 0.95)
+        x0 = np.array([
+            rng.normal(-1, 1),
+            rng.normal(-1, 1),
+            rng.normal(0, 0.2),
+            rng.normal(1.5, 1),
+            rng.normal(0, 0.2),
+            np.log(pi0 / (1 - pi0)),
+        ])
+        res = minimize(fun=fun, x0=x0, jac=jac, method="L-BFGS-B")
+        if best is None or res.fun < best.fun:
+            best = res
+
+    params_arr = np.asarray(_params_from_theta(jnp.asarray(best.x)))
+    params = CMJaxParams(*(float(v) for v in params_arr))
+    info = {
+        "converged": bool(best.success),
+        "message": str(best.message),
+        "objective": float(best.fun),
+        "nit": int(best.nit),
+    }
+    return params, info

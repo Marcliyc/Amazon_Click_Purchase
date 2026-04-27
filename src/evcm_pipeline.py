@@ -26,8 +26,24 @@ def _build_parser():
     p.add_argument("--cm-starts", type=int, default=30)
     p.add_argument("--seed", type=int, default=123)
     p.add_argument("--max-machines", type=int, default=None)
+    p.add_argument("--engine", choices=["numpy", "jax"], default="numpy")
+    p.add_argument("--x64", action="store_true", help="Enable JAX 64-bit mode when using --engine jax")
     p.add_argument("--no-plots", action="store_true")
     return p
+
+
+def _jax_components(enable_x64: bool):
+    import jax
+
+    if enable_x64:
+        jax.config.update("jax_enable_x64", True)
+    print("JAX devices:", jax.devices())
+
+    from .cm_model_jax import fit_cm_model_jax
+    from .ev_model_jax import fit_ev_model_jax
+    from .forecasting_jax import simulate_evcm_forecast_jax
+
+    return fit_ev_model_jax, fit_cm_model_jax, simulate_evcm_forecast_jax
 
 
 def main(args=None):
@@ -51,15 +67,20 @@ def main(args=None):
     T_cal_end = float(cal["t"].max()) if len(cal) else 0.0
     T_holdout_end = float(visits["t"].max()) if len(visits) else T_cal_end
 
-    ev_params, ev_info = fit_ev_model(cal, T_cal_end, n_starts=args.ev_starts, seed=args.seed)
-    cm_params, cm_info = fit_cm_model(cal, n_starts=args.cm_starts, seed=args.seed)
+    if args.engine == "jax":
+        fit_ev_fn, fit_cm_fn, sim_fn = _jax_components(enable_x64=args.x64)
+    else:
+        fit_ev_fn, fit_cm_fn, sim_fn = fit_ev_model, fit_cm_model, simulate_evcm_forecast
+
+    ev_params, ev_info = fit_ev_fn(cal, T_cal_end, n_starts=args.ev_starts, seed=args.seed)
+    cm_params, cm_info = fit_cm_fn(cal, n_starts=args.cm_starts, seed=args.seed)
 
     ll_ev_cal = ev_loglik(cal, T_cal_end, ev_params)
     ll_cm_cal = cm_loglik(cal, cm_params)
     ll_ev_hold = ev_holdout_loglik(cal, hold_known, T_cal_end, T_holdout_end, ev_params)
     ll_cm_hold = cm_holdout_loglik(cal, hold_known, cm_params)
 
-    sim = simulate_evcm_forecast(cal, T_cal_end, T_holdout_end, ev_params, cm_params, n_sims=args.n_sims, freq=args.freq, seed=args.seed)
+    sim = sim_fn(cal, T_cal_end, T_holdout_end, ev_params, cm_params, n_sims=args.n_sims, freq=args.freq, seed=args.seed)
     actual = aggregate_actual_holdout(hold_known, T_cal_end, T_holdout_end, freq=args.freq)
     by_period = actual.merge(sim, on=["period_idx", "period_start_t", "period_end_t"], how="left")
     err, by_period = forecast_error_metrics(by_period)
@@ -88,6 +109,7 @@ def main(args=None):
             "new_machine_holdout_purchases": float(hold_new["purchase"].sum()),
         },
         "fit": {
+            "engine": args.engine,
             "LL_EV_cal": ll_ev_cal,
             "LL_CM_cal": ll_cm_cal,
             "LL_joint_cal": joint_ll,
