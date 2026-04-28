@@ -7,4 +7,7 @@ __all__ = [
     "forecasting",
     "metrics",
     "evcm_pipeline",
+    "ev_model_jax",
+    "cm_model_jax",
+    "forecasting_jax",
 ]
