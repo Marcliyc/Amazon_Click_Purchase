@@ -55,7 +55,7 @@ def main(args=None):
     # session = make_session_visits(raw)
     # visits = make_daily_visits(session) if args.visit_unit == "daily" else make_session_time_visits(session)
     # visits.to_csv(out_dir / "processed_visits.csv", index=False)
-    visits = pd.read_csv("report/evcm_jax/processed_visits.csv")
+    visits = pd.read_csv("reports/evcm_jax2/processed_visits.csv")
 
     # if args.max_machines:
     #     keep = visits["machine_id"].drop_duplicates().head(args.max_machines)
@@ -106,8 +106,8 @@ def main(args=None):
 
     metrics = {
         "data": {
-            "n_raw_rows": int(len(raw)),
-            "n_session_visits": int(len(session)),
+            # "n_raw_rows": int(len(raw)),
+            # "n_session_visits": int(len(session)),
             "n_daily_visits": int(len(visits)),
             "n_machines_total": int(visits["machine_id"].nunique()),
             "n_machines_calibration": split.n_machines_calibration,

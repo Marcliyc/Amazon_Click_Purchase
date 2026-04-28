@@ -149,7 +149,7 @@ def fit_cm_model_jax(visits_cal: pd.DataFrame, n_starts: int = 30, seed: int = 1
             rng.normal(0, 0.2),
             rng.normal(1.5, 1),
             rng.normal(0, 0.2),
-            rng.normal(0.8, 0.1),
+            rng.normal(0.5, 0.3),
             #np.log(pi0 / (1 - pi0)),
         ])
         params, state = solver.run(jnp.asarray(x0))
