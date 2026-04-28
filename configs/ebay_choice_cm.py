@@ -1,0 +1,58 @@
+CONFIG = {
+    "data": {
+        "amazon_path": "data/amazon_sessions.csv",
+        "ebay_path": "data/amazon_sessions.csv",
+        "date_col": "event_date",
+        "session_id_col": "user_session_id",
+        "purchase_col": "tran_flg",
+        "domain_col": "domain_name",
+    },
+    "date_range": {
+        "start": "2024-01-01",
+        "calibration_end": "2024-06-30",
+        "holdout_end": "2024-08-31",
+        "freq": "M",
+    },
+    "amazon_fixed": {
+        "r": 0.457522,
+        "alpha": 7.372648,
+        "s": 16.440086,
+        "beta": 16.369219,
+        "r_v": 1.939664,
+        "r_tau": 22.712252,
+        "psi": -0.080496,
+        "pi": 0.208507,
+        "mu0": 0.751528,
+        "k": 0.730525,
+    },
+    "ebay_init": {
+        "pi": 0.208507,
+        "mu0": 0.751528,
+        "k": 0.730525,
+    },
+    "choice": {
+        "initial_mean": 0.5,
+        "initial_concentration": 20.0,
+        "fix_concentration": True,
+        "min_concentration": 2.0,
+    },
+    "fit": {
+        "seed": 123,
+        "learning_rate": 1e-2,
+        "num_steps": 1000,
+        "likelihood": "negative_binomial",
+        "use_jit": True,
+        "obs_scale_init": 20.0,
+    },
+    "priors": {
+        "lambda_pi": 0.1,
+        "lambda_mu": 0.1,
+        "lambda_k": 0.1,
+        "lambda_choice_mean": 0.01,
+    },
+    "outputs": {
+        "workdir": "runs/ebay_choice_cm",
+        "save_plots": True,
+        "save_forecasts": True,
+    },
+}
