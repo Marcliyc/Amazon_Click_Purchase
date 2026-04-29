@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import optax
 import pandas as pd
 
-from src.ev_beta_choice_cm import EVBetaChoiceCMConfig, constrained_params, init_for_optimizer, loss_fn, predicted_monthly_mean
+from src.ev_beta_choice_cm import EVBetaChoiceCMConfig, constrained_params, init_for_optimizer, loss_fn, predicted_amazon_visits, predicted_monthly_mean
 from src.plots.plot_ebay_choice_cm import save_diagnostic_plots
 
 
@@ -30,17 +30,33 @@ def _resolve_session_key(df: pd.DataFrame, preferred: str | None) -> str:
     return "fallback_session_key"
 
 
-def aggregate_monthly_purchases(df: pd.DataFrame, date_col: str, purchase_col: str, session_col: str | None = None) -> pd.DataFrame:
+def _session_level(df: pd.DataFrame, date_col: str, session_col: str | None = None) -> pd.DataFrame:
     out = df.copy()
     out[date_col] = pd.to_datetime(out[date_col])
     key = _resolve_session_key(out, session_col)
     if key == "fallback_session_key":
         out[key] = out["machine_id"].astype(str) + "_" + out[date_col].dt.strftime("%Y-%m-%d") + "_" + out.get("event_time", "00:00:00").astype(str)
-    out[purchase_col] = out[purchase_col].fillna(0).astype(int)
+    sess = out.groupby(key, as_index=False).agg(month=(date_col, lambda x: pd.to_datetime(x.iloc[0]).to_period("M").to_timestamp("M")))
+    return sess
 
-    sess = (
-        out.groupby(key, as_index=False)
-        .agg(month=(date_col, lambda x: pd.to_datetime(x.iloc[0]).to_period("M").to_timestamp("M")), purchase=(purchase_col, "max"))
+
+def aggregate_monthly_visits(df: pd.DataFrame, date_col: str, session_col: str | None = None, output_col: str = "visits") -> pd.DataFrame:
+    sess = _session_level(df, date_col, session_col)
+    monthly = sess.groupby("month", as_index=False).size().rename(columns={"size": output_col})
+    return monthly.sort_values("month").reset_index(drop=True)
+
+
+def aggregate_monthly_purchases(df: pd.DataFrame, date_col: str, purchase_col: str, session_col: str | None = None) -> pd.DataFrame:
+    out = df.copy()
+    out[purchase_col] = out[purchase_col].fillna(0).astype(int)
+    out[date_col] = pd.to_datetime(out[date_col])
+    key = _resolve_session_key(out, session_col)
+    if key == "fallback_session_key":
+        out[key] = out["machine_id"].astype(str) + "_" + out[date_col].dt.strftime("%Y-%m-%d") + "_" + out.get("event_time", "00:00:00").astype(str)
+
+    sess = out.groupby(key, as_index=False).agg(
+        month=(date_col, lambda x: pd.to_datetime(x.iloc[0]).to_period("M").to_timestamp("M")),
+        purchase=(purchase_col, "max"),
     )
     monthly = sess.groupby("month", as_index=False)["purchase"].sum().rename(columns={"purchase": "actual_ebay_purchases"})
     return monthly.sort_values("month").reset_index(drop=True)
@@ -56,6 +72,10 @@ def _git_hash() -> str:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except Exception:
         return "unknown"
+
+
+def _build_month_grid(start: str, end: str) -> pd.DataFrame:
+    return pd.DataFrame({"month": pd.date_range(start=start, end=end, freq="M")})
 
 
 def main(args=None):
@@ -74,15 +94,28 @@ def main(args=None):
 
     data_cfg = cfg["data"]
     dr = cfg["date_range"]
-    ebay = pd.read_csv(data_cfg["ebay_path"])
-    ebay[data_cfg["date_col"]] = pd.to_datetime(ebay[data_cfg["date_col"]])
-    ebay = ebay[(ebay[data_cfg["date_col"]] >= dr["start"]) & (ebay[data_cfg["date_col"]] <= dr["holdout_end"])].copy()
 
-    monthly = aggregate_monthly_purchases(ebay, data_cfg["date_col"], data_cfg["purchase_col"], data_cfg.get("session_id_col"))
+    ebay = pd.read_csv(data_cfg["ebay_path"])
+    amazon = pd.read_csv(data_cfg["amazon_path"])
+    for df in [ebay, amazon]:
+        df[data_cfg["date_col"]] = pd.to_datetime(df[data_cfg["date_col"]])
+
+    ebay = ebay[(ebay[data_cfg["date_col"]] >= dr["start"]) & (ebay[data_cfg["date_col"]] <= dr["holdout_end"])].copy()
+    amazon = amazon[(amazon[data_cfg["date_col"]] >= dr["start"]) & (amazon[data_cfg["date_col"]] <= dr["holdout_end"])].copy()
+
+    monthly_grid = _build_month_grid(dr["start"], dr["holdout_end"])
+    monthly_ebay = aggregate_monthly_purchases(ebay, data_cfg["date_col"], data_cfg["purchase_col"], data_cfg.get("session_id_col"))
+    monthly_amz_visits = aggregate_monthly_visits(amazon, data_cfg["date_col"], data_cfg.get("session_id_col"), output_col="actual_amazon_visits")
+
+    monthly = monthly_grid.merge(monthly_ebay, on="month", how="left").merge(monthly_amz_visits, on="month", how="left")
+    monthly["actual_ebay_purchases"] = monthly["actual_ebay_purchases"].fillna(0.0)
+    monthly["actual_amazon_visits"] = monthly["actual_amazon_visits"].fillna(0.0)
     monthly["split"] = monthly["month"].apply(lambda d: "calibration" if d <= pd.to_datetime(dr["calibration_end"]) else "holdout")
     monthly["month_index"] = range(len(monthly))
 
-    total_customers = float(ebay["machine_id"].nunique())
+    total_customers_ebay = float(ebay["machine_id"].nunique())
+    total_customers_amazon = float(amazon["machine_id"].nunique())
+
     model_cfg = EVBetaChoiceCMConfig(
         amazon_fixed=cfg["amazon_fixed"],
         ebay_init=cfg["ebay_init"],
@@ -91,17 +124,28 @@ def main(args=None):
         fit=cfg["fit"],
     )
     params = init_for_optimizer(model_cfg)
+    params_initial = init_for_optimizer(model_cfg)
 
     train_mask = monthly["split"] == "calibration"
     x_train = jnp.asarray(monthly.loc[train_mask, "month_index"].to_numpy(), dtype=jnp.float32)
-    y_train = jnp.asarray(monthly.loc[train_mask, "actual_ebay_purchases"].to_numpy(), dtype=jnp.float32)
+    y_ebay_train = jnp.asarray(monthly.loc[train_mask, "actual_ebay_purchases"].to_numpy(), dtype=jnp.float32)
+    y_amz_visits_train = jnp.asarray(monthly.loc[train_mask, "actual_amazon_visits"].to_numpy(), dtype=jnp.float32)
 
     optimizer = optax.adam(float(cfg["fit"].get("learning_rate", 1e-2)))
     opt_state = optimizer.init(params)
 
     @jax.jit
     def step(p, s):
-        loss, grads = jax.value_and_grad(loss_fn)(p, x_train, y_train, total_customers, model_cfg)
+        loss, grads = jax.value_and_grad(loss_fn)(
+            p,
+            x_train,
+            y_ebay_train,
+            total_customers_ebay,
+            model_cfg,
+            x_train,
+            y_amz_visits_train,
+            total_customers_amazon,
+        )
         updates, s = optimizer.update(grads, s, p)
         p = optax.apply_updates(p, updates)
         return p, s, loss
@@ -115,8 +159,11 @@ def main(args=None):
     p_final = constrained_params(params, model_cfg)
 
     x_all = jnp.asarray(monthly["month_index"].to_numpy(), dtype=jnp.float32)
-    pred = predicted_monthly_mean(params, x_all, total_customers, model_cfg)
-    monthly["pred_mean_ebay_purchases"] = [float(v) for v in pred]
+    pred_ebay = predicted_monthly_mean(params, x_all, total_customers_ebay, model_cfg)
+    pred_amz_visits = predicted_amazon_visits(params, x_all, total_customers_amazon, model_cfg)
+
+    monthly["pred_mean_ebay_purchases"] = [float(v) for v in pred_ebay]
+    monthly["pred_mean_amazon_visits"] = [float(v) for v in pred_amz_visits]
     monthly["pred_p05_ebay_purchases"] = pd.NA
     monthly["pred_p50_ebay_purchases"] = pd.NA
     monthly["pred_p95_ebay_purchases"] = pd.NA
@@ -127,7 +174,6 @@ def main(args=None):
     cal_mape = _mape(cal["actual_ebay_purchases"], cal["pred_mean_ebay_purchases"])
     hold_mape = _mape(hold["actual_ebay_purchases"], hold["pred_mean_ebay_purchases"]) if len(hold) else 0.0
 
-    params_initial = init_for_optimizer(model_cfg)
     pd.DataFrame({"param": list(params_initial.keys()), "raw_value": [float(v) for v in params_initial.values()]}).to_csv(workdir / "params_initial.csv", index=False)
 
     fitted_json = {

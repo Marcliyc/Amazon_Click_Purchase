@@ -43,6 +43,8 @@ CONFIG = {
         "likelihood": "negative_binomial",
         "use_jit": True,
         "obs_scale_init": 20.0,
+        "fit_shared_ev": True,
+        "amazon_visit_weight": 1.0,
     },
     "priors": {
         "lambda_pi": 0.1,

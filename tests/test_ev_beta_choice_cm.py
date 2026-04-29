@@ -1,7 +1,14 @@
 import jax
 import jax.numpy as jnp
 
-from src.ev_beta_choice_cm import EVBetaChoiceCMConfig, constrained_params, init_for_optimizer, loss_fn, predicted_monthly_mean
+from src.ev_beta_choice_cm import (
+    EVBetaChoiceCMConfig,
+    constrained_params,
+    init_for_optimizer,
+    loss_fn,
+    predicted_amazon_visits,
+    predicted_monthly_mean,
+)
 
 
 def _cfg():
@@ -21,7 +28,7 @@ def _cfg():
         ebay_init={"pi": 0.208507, "mu0": 0.751528, "k": 0.730525},
         choice={"initial_mean": 0.5, "initial_concentration": 20.0, "fix_concentration": True, "min_concentration": 2.0},
         priors={"lambda_pi": 0.1, "lambda_mu": 0.1, "lambda_k": 0.1},
-        fit={"likelihood": "negative_binomial", "obs_scale_init": 20.0},
+        fit={"likelihood": "negative_binomial", "obs_scale_init": 20.0, "fit_shared_ev": True, "amazon_visit_weight": 1.0},
     )
 
 
@@ -32,9 +39,15 @@ def test_transforms_and_initialization_match_amazon():
     assert p.pi_ebay > 0 and p.pi_ebay < 1
     assert p.mu0_ebay > 0
     assert p.k_ebay > 0
-    assert abs(p.pi_ebay - p.pi_amazon) < 1e-5
-    assert abs(p.mu0_ebay - p.mu0_amazon) < 1e-5
-    assert abs(p.k_ebay - p.k_amazon) < 1e-5
+    assert abs(float(p.pi_ebay - p.pi_amazon)) < 1e-5
+    assert abs(float(p.mu0_ebay - p.mu0_amazon)) < 1e-5
+    assert abs(float(p.k_ebay - p.k_amazon)) < 1e-5
+
+
+def test_fixed_amazon_baselines_not_in_trainable_tree():
+    raw = init_for_optimizer(_cfg())
+    forbidden = {"r", "alpha", "s", "beta", "pi_amazon", "mu0_amazon", "k_amazon"}
+    assert forbidden.isdisjoint(set(raw.keys()))
 
 
 def test_likelihood_prefers_close_prediction():
@@ -48,24 +61,27 @@ def test_likelihood_prefers_close_prediction():
     raw_good["raw_pi_ebay"] = jnp.asarray(-1.0)
     raw_bad["raw_pi_ebay"] = jnp.asarray(-8.0)
 
-    lg = float(loss_fn(raw_good, x, y, 50.0, cfg))
-    lb = float(loss_fn(raw_bad, x, y, 50.0, cfg))
+    lg = float(loss_fn(raw_good, x, y, 50.0, cfg, x, jnp.array([60.0, 58.0, 55.0, 52.0]), 100.0))
+    lb = float(loss_fn(raw_bad, x, y, 50.0, cfg, x, jnp.array([60.0, 58.0, 55.0, 52.0]), 100.0))
     assert lg < lb
 
 
-def test_jit_grad_no_nans():
+def test_jit_grad_no_nans_and_amazon_visit_prediction_positive():
     cfg = _cfg()
     raw = init_for_optimizer(cfg)
     x = jnp.arange(3, dtype=jnp.float32)
     y = jnp.array([1.0, 1.0, 2.0], dtype=jnp.float32)
+    yv = jnp.array([10.0, 11.0, 9.0], dtype=jnp.float32)
 
-    wrapped = lambda rp, xx, yy, tc: loss_fn(rp, xx, yy, tc, cfg)
+    wrapped = lambda rp, xx, yy, yvisit: loss_fn(rp, xx, yy, 10.0, cfg, xx, yvisit, 30.0)
     jit_loss = jax.jit(wrapped)
-    v = jit_loss(raw, x, y, 10.0)
+    v = jit_loss(raw, x, y, yv)
     assert jnp.isfinite(v)
 
-    grads = jax.grad(wrapped, argnums=0)(raw, x, y, 10.0)
+    grads = jax.grad(wrapped, argnums=0)(raw, x, y, yv)
     assert jnp.isfinite(grads["raw_pi_ebay"])
 
     pred = predicted_monthly_mean(raw, x, 10.0, cfg)
+    pred_amz = predicted_amazon_visits(raw, x, 30.0, cfg)
     assert jnp.all(pred > 0)
+    assert jnp.all(pred_amz > 0)
