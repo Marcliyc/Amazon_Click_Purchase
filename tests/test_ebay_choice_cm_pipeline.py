@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.pipelines.fit_ebay_choice_cm_jax import aggregate_monthly_purchases, aggregate_monthly_visits
+from src.pipelines.fit_ebay_choice_cm_jax import _filter_domain, aggregate_monthly_purchases, aggregate_monthly_visits
 
 
 def test_monthly_aggregation_deduplicates_sessions():
@@ -28,3 +28,14 @@ def test_monthly_visit_aggregation_uses_session_dedup():
     )
     out = aggregate_monthly_visits(df, "event_date", "user_session_id", output_col="actual_amazon_visits")
     assert int(out.loc[0, "actual_amazon_visits"]) == 2
+
+
+def test_domain_filter_prevents_cross_site_mixing():
+    df = pd.DataFrame(
+        {
+            "domain_name": ["amazon.com", "ebay.com", "ebay.com"],
+            "x": [1, 2, 3],
+        }
+    )
+    out = _filter_domain(df, "domain_name", "ebay.com")
+    assert len(out) == 2

@@ -6,6 +6,8 @@ CONFIG = {
         "session_id_col": "user_session_id",
         "purchase_col": "tran_flg",
         "domain_col": "domain_name",
+        "amazon_domain_value": None,
+        "ebay_domain_value": None,
     },
     "date_range": {
         "start": "2024-01-01",

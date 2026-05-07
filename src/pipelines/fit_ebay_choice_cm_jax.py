@@ -78,6 +78,14 @@ def _build_month_grid(start: str, end: str) -> pd.DataFrame:
     return pd.DataFrame({"month": pd.date_range(start=start, end=end, freq="M")})
 
 
+def _filter_domain(df: pd.DataFrame, domain_col: str | None, domain_value: str | None) -> pd.DataFrame:
+    if not domain_col or domain_col not in df.columns or not domain_value:
+        return df
+    wanted = domain_value.strip().lower()
+    domain_series = df[domain_col].astype(str).str.strip().str.lower()
+    return df[domain_series == wanted].copy()
+
+
 def main(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -102,6 +110,9 @@ def main(args=None):
 
     ebay = ebay[(ebay[data_cfg["date_col"]] >= dr["start"]) & (ebay[data_cfg["date_col"]] <= dr["holdout_end"])].copy()
     amazon = amazon[(amazon[data_cfg["date_col"]] >= dr["start"]) & (amazon[data_cfg["date_col"]] <= dr["holdout_end"])].copy()
+    domain_col = data_cfg.get("domain_col")
+    ebay = _filter_domain(ebay, domain_col, data_cfg.get("ebay_domain_value"))
+    amazon = _filter_domain(amazon, domain_col, data_cfg.get("amazon_domain_value"))
 
     monthly_grid = _build_month_grid(dr["start"], dr["holdout_end"])
     monthly_ebay = aggregate_monthly_purchases(ebay, data_cfg["date_col"], data_cfg["purchase_col"], data_cfg.get("session_id_col"))
@@ -110,11 +121,20 @@ def main(args=None):
     monthly = monthly_grid.merge(monthly_ebay, on="month", how="left").merge(monthly_amz_visits, on="month", how="left")
     monthly["actual_ebay_purchases"] = monthly["actual_ebay_purchases"].fillna(0.0)
     monthly["actual_amazon_visits"] = monthly["actual_amazon_visits"].fillna(0.0)
-    monthly["split"] = monthly["month"].apply(lambda d: "calibration" if d <= pd.to_datetime(dr["calibration_end"]) else "holdout")
+    cal_end = pd.to_datetime(dr["calibration_end"]).to_period("M").to_timestamp("M")
+    monthly["split"] = monthly["month"].apply(lambda d: "calibration" if d <= cal_end else "holdout")
     monthly["month_index"] = range(len(monthly))
 
     total_customers_ebay = float(ebay["machine_id"].nunique())
     total_customers_amazon = float(amazon["machine_id"].nunique())
+    cal_preview = monthly[monthly["split"] == "calibration"].tail(1)
+    if len(cal_preview):
+        last_cal = cal_preview.iloc[0]
+        print(
+            f"Last calibration month {last_cal['month'].date()}: "
+            f"actual_ebay_purchases={float(last_cal['actual_ebay_purchases']):.3f}, "
+            f"actual_amazon_visits={float(last_cal['actual_amazon_visits']):.3f}"
+        )
 
     model_cfg = EVBetaChoiceCMConfig(
         amazon_fixed=cfg["amazon_fixed"],
