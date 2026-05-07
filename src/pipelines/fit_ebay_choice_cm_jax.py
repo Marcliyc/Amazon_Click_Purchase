@@ -75,7 +75,8 @@ def _git_hash() -> str:
 
 
 def _build_month_grid(start: str, end: str) -> pd.DataFrame:
-    return pd.DataFrame({"month": pd.date_range(start=start, end=end, freq="M")})
+    months = pd.period_range(pd.to_datetime(start).to_period("M"), pd.to_datetime(end).to_period("M"), freq="M").to_timestamp("M")
+    return pd.DataFrame({"month": months})
 
 
 def _filter_domain(df: pd.DataFrame, domain_col: str | None, domain_value: str | None) -> pd.DataFrame:

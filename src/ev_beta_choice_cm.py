@@ -139,6 +139,15 @@ def predicted_amazon_visits(raw: dict[str, jnp.ndarray], month_index: jnp.ndarra
     return jnp.maximum(visits, EPS)
 
 
+def predicted_ebay_visits(raw: dict[str, jnp.ndarray], month_index: jnp.ndarray, total_customers: float, config: EVBetaChoiceCMConfig) -> jnp.ndarray:
+    p = constrained_params(raw, config)
+    month_index = month_index.astype(jnp.float32)
+    visit_intentions = _expected_visit_intentions(month_index, p.r_v, p.psi, p.mu0_ebay, p.k_ebay)
+    choice_mean = p.choice_a / jnp.maximum(p.choice_a + p.choice_b, EPS)
+    visits = total_customers * visit_intentions * choice_mean
+    return jnp.maximum(visits, EPS)
+
+
 def negbinom_logpmf_from_mean_dispersion(y: jnp.ndarray, mean: jnp.ndarray, dispersion: jnp.ndarray) -> jnp.ndarray:
     mean = jnp.maximum(mean, EPS)
     dispersion = jnp.maximum(dispersion, EPS)
