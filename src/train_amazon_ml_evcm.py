@@ -11,7 +11,8 @@ import pandas as pd
 import yaml
 
 from .amazon_covariates import build_amazon_covariates
-from .amazon_ml_evcm import PARAM_NAMES, init_head_params, loss_fn, machine_parameter_frame, make_training_data
+from .amazon_ml_evcm import PARAM_NAMES, init_head_params, load_base_constrained_from_csv, loss_fn, machine_parameter_frame, make_training_data
+from .cm_model_jax import _cm_purchase_probability
 from .data_prep import load_raw_data, make_daily_visits, make_session_time_visits, make_session_visits, split_calibration_holdout
 from .plot_amazon_ml_evcm import save_default_plots
 
@@ -60,6 +61,93 @@ def _segment_summary(machine_params: pd.DataFrame, visits: pd.DataFrame, segment
     return pd.DataFrame(rows)
 
 
+def _mape(actual: pd.Series, predicted: pd.Series) -> float | None:
+    denom = actual.replace(0, pd.NA)
+    vals = ((actual - predicted).abs() / denom).dropna()
+    return float(vals.mean() * 100.0) if len(vals) else None
+
+
+def _forecast_holdout_purchases(cal: pd.DataFrame, holdout: pd.DataFrame, machine_params: pd.DataFrame, segment_cols: list[str]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    if holdout.empty:
+        empty = pd.DataFrame()
+        return empty, empty, empty, {"holdout_incremental_mape": None, "holdout_cumulative_mape": None}
+
+    param_lookup = {row.machine_id: row for row in machine_params.itertuples(index=False)}
+    states = {}
+    for mid, g in cal.sort_values(["machine_id", "t"]).groupby("machine_id"):
+        purchases = g["purchase"].to_numpy(dtype=int)
+        prior = int(purchases.sum())
+        bought_positions = [i + 1 for i, y in enumerate(purchases) if y > 0]
+        states[mid] = {"total_visits": int(len(purchases)), "prior_purchases": prior, "last_purchase_idx": int(bought_positions[-1]) if bought_positions else 0}
+
+    rows = []
+    for r in holdout.sort_values(["machine_id", "t"]).itertuples(index=False):
+        mid = getattr(r, "machine_id")
+        if mid not in param_lookup:
+            continue
+        state = states.setdefault(mid, {"total_visits": 0, "prior_purchases": 0, "last_purchase_idx": 0})
+        visit_idx = state["total_visits"] + 1
+        p_row = param_lookup[mid]
+        cm_vec = jnp.asarray([p_row.cm_r_v, p_row.cm_mu0, p_row.cm_k, p_row.cm_r_tau, p_row.cm_psi, p_row.cm_pi])
+        pred = float(_cm_purchase_probability(jnp.asarray(visit_idx), jnp.asarray(state["prior_purchases"]), jnp.asarray(state["last_purchase_idx"]), cm_vec))
+        actual = int(getattr(r, "purchase"))
+        row = {
+            "machine_id": mid,
+            "t": float(getattr(r, "t")),
+            "period": pd.to_datetime(getattr(r, "visit_datetime")).to_period("M").to_timestamp("M") if hasattr(r, "visit_datetime") else pd.NaT,
+            "actual_purchases": actual,
+            "predicted_purchases": pred,
+        }
+        for col in segment_cols:
+            row[col] = getattr(p_row, col) if hasattr(p_row, col) else None
+        rows.append(row)
+        state["total_visits"] = visit_idx
+        if actual > 0:
+            state["prior_purchases"] += actual
+            state["last_purchase_idx"] = visit_idx
+
+    scored = pd.DataFrame(rows)
+    if scored.empty:
+        empty = pd.DataFrame()
+        return scored, empty, empty, {"holdout_incremental_mape": None, "holdout_cumulative_mape": None}
+
+    by_period = scored.groupby("period", as_index=False).agg(actual_purchases=("actual_purchases", "sum"), predicted_purchases=("predicted_purchases", "sum"))
+    by_period = by_period.sort_values("period")
+    by_period["cumulative_actual_purchases"] = by_period["actual_purchases"].cumsum()
+    by_period["cumulative_predicted_purchases"] = by_period["predicted_purchases"].cumsum()
+    by_period["ape"] = (by_period["actual_purchases"] - by_period["predicted_purchases"]).abs() / by_period["actual_purchases"].replace(0, pd.NA)
+    by_period["cumulative_ape"] = (by_period["cumulative_actual_purchases"] - by_period["cumulative_predicted_purchases"]).abs() / by_period["cumulative_actual_purchases"].replace(0, pd.NA)
+
+    seg_rows = []
+    for col in segment_cols:
+        if col not in scored.columns:
+            continue
+        grouped = scored.groupby([col, "period"], dropna=False, as_index=False).agg(actual_purchases=("actual_purchases", "sum"), predicted_purchases=("predicted_purchases", "sum"), n_sessions=("machine_id", "size"))
+        for segment, g in grouped.sort_values("period").groupby(col, dropna=False):
+            g = g.copy()
+            g["cum_actual"] = g["actual_purchases"].cumsum()
+            g["cum_pred"] = g["predicted_purchases"].cumsum()
+            seg_rows.append({
+                "segment_variable": col,
+                "segment": str(segment),
+                "n_periods": int(len(g)),
+                "n_sessions": int(g["n_sessions"].sum()),
+                "actual_purchases": float(g["actual_purchases"].sum()),
+                "predicted_purchases": float(g["predicted_purchases"].sum()),
+                "incremental_mape": _mape(g["actual_purchases"], g["predicted_purchases"]),
+                "cumulative_mape": _mape(g["cum_actual"], g["cum_pred"]),
+                "final_cumulative_ape": (abs(float(g["cum_actual"].iloc[-1]) - float(g["cum_pred"].iloc[-1])) / float(g["cum_actual"].iloc[-1]) * 100.0) if float(g["cum_actual"].iloc[-1]) != 0 else None,
+            })
+    segment_mape = pd.DataFrame(seg_rows)
+    metrics = {
+        "holdout_incremental_mape": _mape(by_period["actual_purchases"], by_period["predicted_purchases"]),
+        "holdout_cumulative_mape": _mape(by_period["cumulative_actual_purchases"], by_period["cumulative_predicted_purchases"]),
+        "holdout_actual_purchases": float(by_period["actual_purchases"].sum()),
+        "holdout_predicted_purchases": float(by_period["predicted_purchases"].sum()),
+    }
+    return scored, by_period, segment_mape, metrics
+
+
 def main(args=None):
     parser = argparse.ArgumentParser(description="Train Amazon-only covariate-conditioned EV/CM model.")
     parser.add_argument("--config", required=True)
@@ -97,7 +185,14 @@ def main(args=None):
     print(f"parameters={PARAM_NAMES}")
     print(f"train_period={split.global_start}..{split.calibration_end} validation_period={split.calibration_end}..{split.holdout_end}")
 
-    params = init_head_params(len(feature_names), seed=int(fit_cfg.get("seed", 123)), w_scale=float(fit_cfg.get("w_init_scale", 0.0)))
+    init_cfg = cfg.get("initialization", {})
+    base_constrained = load_base_constrained_from_csv(init_cfg.get("param_ev_path"), init_cfg.get("param_cm_path"))
+    params = init_head_params(
+        len(feature_names),
+        seed=int(fit_cfg.get("seed", 123)),
+        w_scale=float(fit_cfg.get("w_init_scale", 0.0)),
+        base_constrained=base_constrained,
+    )
     opt = optax.adam(float(fit_cfg.get("learning_rate", 0.01)))
     opt_state = opt.init(params)
     use_covariates = bool(cov_cfg.get("use_covariates", True))
@@ -128,23 +223,30 @@ def main(args=None):
     activity = cal.groupby("machine_id", as_index=False).agg(n_sessions=("purchase", "size"), purchases=("purchase", "sum"), purchase_rate=("purchase", "mean"))
     machine_params = machine_params.merge(activity, on="machine_id", how="left")
     coefficients = _coefficient_frame(params, feature_names)
-    segments = _segment_summary(machine_params, cal, ["household_income", "household_size", "census_region", "racial_background", "country_of_origin"])
+    segment_cols = ["household_income", "household_size", "census_region", "racial_background", "country_of_origin"]
+    segments = _segment_summary(machine_params, cal, segment_cols)
+    holdout_scored, holdout_by_period, segment_holdout_mape, holdout_metrics = _forecast_holdout_purchases(cal, val_known, machine_params, segment_cols)
 
     loss_history = pd.DataFrame(history)
     comparison = pd.DataFrame(
         [
-            {"model": "homogeneous_base", "num_parameters": len(PARAM_NAMES), "train_nll": float(base_nll), "validation_nll": None, "AIC": 2 * len(PARAM_NAMES) + 2 * float(base_nll), "BIC": None},
-            {"model": "amazon_ml_evcm", "num_parameters": int(params["base"].size + params["W"].size), "train_nll": float(train_nll), "validation_nll": float(val_nll), "AIC": 2 * int(params["base"].size + params["W"].size) + 2 * float(train_nll), "BIC": None},
+            {"model": "homogeneous_base", "num_parameters": len(PARAM_NAMES), "train_nll": float(base_nll), "validation_nll": None, "AIC": 2 * len(PARAM_NAMES) + 2 * float(base_nll), "BIC": None, "holdout_incremental_mape": None, "holdout_cumulative_mape": None},
+            {"model": "amazon_ml_evcm", "num_parameters": int(params["base"].size + params["W"].size), "train_nll": float(train_nll), "validation_nll": float(val_nll), "AIC": 2 * int(params["base"].size + params["W"].size) + 2 * float(train_nll), "BIC": None, **holdout_metrics},
         ]
     )
 
     machine_params.to_csv(out / "machine_parameter_predictions.csv", index=False)
     segments.to_csv(out / "segment_parameter_summary.csv", index=False)
     coefficients.to_csv(out / "covariate_coefficients.csv", index=False)
+    holdout_scored.to_csv(out / "holdout_session_predictions.csv", index=False)
+    holdout_by_period.to_csv(out / "holdout_forecast_by_period.csv", index=False)
+    segment_holdout_mape.to_csv(out / "segment_holdout_mape.csv", index=False)
     loss_history.to_csv(out / "training_loss.csv", index=False)
     comparison.to_csv(out / "model_comparison.csv", index=False)
     _save_json(out / "covariate_metadata.json", metadata.to_dict())
     _save_json(out / "config_used.json", cfg)
+    _save_json(out / "initial_base_constrained.json", base_constrained)
+    _save_json(out / "holdout_metrics.json", holdout_metrics)
     _save_json(out / "fitted_params.json", {"base": jax.device_get(params["base"]).tolist(), "W": jax.device_get(params["W"]).tolist(), "param_names": PARAM_NAMES, "feature_names": feature_names})
 
     save_default_plots(loss_history, machine_params, coefficients, plots)

@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 from .cm_model_jax import _customer_loglik as _cm_customer_loglik
 from .ev_model_jax import _customer_loglik as _ev_customer_loglik
@@ -53,9 +54,9 @@ def logit(p: float) -> float:
     return float(np.log(p) - np.log1p(-p))
 
 
-def default_base_raw() -> np.ndarray:
+def default_base_constrained() -> dict[str, float]:
     # Defaults are the previously estimated Amazon EV/CM values used elsewhere in this repo.
-    constrained = {
+    return {
         "ev_r": 0.457522,
         "ev_alpha": 7.372648,
         "ev_s": 16.440086,
@@ -67,6 +68,9 @@ def default_base_raw() -> np.ndarray:
         "cm_psi": -0.080496,
         "cm_pi": 0.208507,
     }
+
+
+def constrained_to_raw(constrained: dict[str, float]) -> np.ndarray:
     return np.asarray(
         [
             inverse_softplus(constrained["ev_r"]),
@@ -75,7 +79,7 @@ def default_base_raw() -> np.ndarray:
             inverse_softplus(constrained["ev_beta"]),
             inverse_softplus(constrained["cm_r_v"]),
             inverse_softplus(constrained["cm_mu0"]),
-            np.log(constrained["cm_k"]),
+            np.log(max(constrained["cm_k"], EPS)),
             inverse_softplus(constrained["cm_r_tau"]),
             constrained["cm_psi"],
             logit(constrained["cm_pi"]),
@@ -84,10 +88,46 @@ def default_base_raw() -> np.ndarray:
     )
 
 
-def init_head_params(n_features: int, seed: int = 123, w_scale: float = 0.0) -> dict[str, jnp.ndarray]:
+def default_base_raw() -> np.ndarray:
+    return constrained_to_raw(default_base_constrained())
+
+
+def _read_param_csv(path: str | Path) -> dict[str, float]:
+    frame = pd.read_csv(path)
+    if {"param", "value"}.issubset(frame.columns):
+        return {str(r["param"]): float(r["value"]) for _, r in frame.iterrows()}
+    if frame.shape[1] >= 2:
+        return {str(r.iloc[0]): float(r.iloc[1]) for _, r in frame.iterrows()}
+    raise ValueError(f"Parameter CSV {path} must contain param/value columns")
+
+
+def load_base_constrained_from_csv(param_ev_path: str | Path | None = None, param_cm_path: str | Path | None = None) -> dict[str, float]:
+    constrained = default_base_constrained()
+    if param_ev_path:
+        ev = _read_param_csv(param_ev_path)
+        mapping = {"r": "ev_r", "alpha": "ev_alpha", "s": "ev_s", "beta": "ev_beta"}
+        for src, dst in mapping.items():
+            if src in ev:
+                constrained[dst] = ev[src]
+    if param_cm_path:
+        cm = _read_param_csv(param_cm_path)
+        mapping = {"r_v": "cm_r_v", "mu0": "cm_mu0", "k": "cm_k", "r_tau": "cm_r_tau", "psi": "cm_psi", "pi": "cm_pi"}
+        for src, dst in mapping.items():
+            if src in cm:
+                constrained[dst] = cm[src]
+    return constrained
+
+
+def init_head_params(
+    n_features: int,
+    seed: int = 123,
+    w_scale: float = 0.0,
+    base_constrained: dict[str, float] | None = None,
+) -> dict[str, jnp.ndarray]:
     rng = np.random.default_rng(seed)
     W = rng.normal(0.0, w_scale, size=(n_features, len(PARAM_NAMES))).astype(np.float32)
-    return {"base": jnp.asarray(default_base_raw()), "W": jnp.asarray(W)}
+    base = constrained_to_raw(base_constrained or default_base_constrained())
+    return {"base": jnp.asarray(base), "W": jnp.asarray(W)}
 
 
 def apply_constraints(eta: jnp.ndarray) -> jnp.ndarray:

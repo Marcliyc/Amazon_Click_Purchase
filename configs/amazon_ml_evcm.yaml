@@ -5,6 +5,9 @@ data:
   calibration_fraction: 0.8
   domain_col: domain_name
   amazon_domain_value: null
+initialization:
+  param_ev_path: reports/evcm/params_ev.csv
+  param_cm_path: reports/evcm/params_cm.csv
 covariates:
   use_covariates: true
   covariate_head: linear

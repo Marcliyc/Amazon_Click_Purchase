@@ -18,6 +18,8 @@ Behavioral/session outcome columns such as `tran_flg`, `basket_tot`, `prod_totpr
 
 ## Train
 
+By default, `configs/amazon_ml_evcm.yaml` initializes the homogeneous EV/CM base parameters from `reports/evcm/params_ev.csv` and `reports/evcm/params_cm.csv`. The linear ML head then learns covariate-driven changes around that base. Override `initialization.param_ev_path` or `initialization.param_cm_path` to use a different Amazon baseline.
+
 ```bash
 python scripts/train_amazon_ml_evcm.py --config configs/amazon_ml_evcm.yaml
 ```
@@ -31,6 +33,9 @@ Key outputs under `outputs.workdir`:
 - `fitted_params.json`
 - `training_loss.csv`
 - `model_comparison.csv`
+- `holdout_forecast_by_period.csv`
+- `segment_holdout_mape.csv`
+- `holdout_metrics.json`
 - `plots/training_loss.png`
 - `plots/param_by_income.png`
 - `plots/param_by_region.png`

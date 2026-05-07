@@ -63,3 +63,53 @@ def test_amazon_ml_evcm_loss_jit_grad_finite():
     assert jnp.isfinite(value)
     assert jnp.isfinite(grads["base"]).all()
     assert jnp.isfinite(grads["W"]).all()
+
+
+def test_load_base_constrained_from_param_csvs(tmp_path):
+    from src.amazon_ml_evcm import load_base_constrained_from_csv
+
+    ev = tmp_path / "params_ev.csv"
+    cm = tmp_path / "params_cm.csv"
+    ev.write_text("param,value\nr,1.1\nalpha,2.2\ns,3.3\nbeta,4.4\n")
+    cm.write_text("param,value\nr_v,5.5\nmu0,6.6\nk,0.7\nr_tau,8.8\npsi,-0.1\npi,0.2\n")
+    base = load_base_constrained_from_csv(ev, cm)
+    assert base["ev_r"] == 1.1
+    assert base["ev_beta"] == 4.4
+    assert base["cm_mu0"] == 6.6
+    assert base["cm_pi"] == 0.2
+
+
+def test_holdout_forecast_reports_period_and_segment_mapes():
+    from src.amazon_ml_evcm import machine_parameter_frame
+    from src.train_amazon_ml_evcm import _forecast_holdout_purchases
+
+    cal = pd.DataFrame(
+        {
+            "machine_id": [1, 1, 2],
+            "t": [0.0, 1.0, 0.5],
+            "purchase": [0, 1, 0],
+            "visit_datetime": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
+        }
+    )
+    hold = pd.DataFrame(
+        {
+            "machine_id": [1, 2],
+            "t": [3.0, 3.5],
+            "purchase": [1, 0],
+            "visit_datetime": pd.to_datetime(["2024-02-01", "2024-02-02"]),
+        }
+    )
+    theta = np.asarray(
+        [
+            [0.5, 7.0, 16.0, 16.0, 1.9, 0.75, 0.73, 22.0, -0.08, 0.21],
+            [0.5, 7.0, 16.0, 16.0, 1.9, 0.75, 0.73, 22.0, -0.08, 0.21],
+        ],
+        dtype=np.float32,
+    )
+    machine_params = machine_parameter_frame([1, 2], theta)
+    machine_params["census_region"] = ["A", "B"]
+    scored, by_period, segment_mape, metrics = _forecast_holdout_purchases(cal, hold, machine_params, ["census_region"])
+    assert len(scored) == 2
+    assert "holdout_incremental_mape" in metrics
+    assert not by_period.empty
+    assert set(segment_mape["segment_variable"]) == {"census_region"}

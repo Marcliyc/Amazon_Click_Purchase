@@ -22,11 +22,16 @@ def main(args=None):
 
     summary = pd.read_csv(fit / "segment_parameter_summary.csv")
     comparison = pd.read_csv(fit / "model_comparison.csv")
+    holdout_mape_path = fit / "segment_holdout_mape.csv"
+    holdout_mape = pd.read_csv(holdout_mape_path) if holdout_mape_path.exists() else pd.DataFrame()
     print(f"Regenerated plots in {plots}")
     print("Model comparison:")
     print(comparison.to_string(index=False))
     print("Top segment summaries:")
     print(summary.head(10).to_string(index=False))
+    if not holdout_mape.empty:
+        print("Top segment holdout MAPE summaries:")
+        print(holdout_mape.head(10).to_string(index=False))
 
 
 if __name__ == "__main__":
