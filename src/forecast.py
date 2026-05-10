@@ -61,6 +61,7 @@ def forecast_holdout(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     from .dataset import WindowedCohortDataset
     from .losses import implied_cohort_counts, implied_cohort_revenue
+    from .evcm_segment import forecast_evcm_early_purchase
     from .train import prepare_model_tables
 
     outdir = Path(config["data"]["output_dir"])
@@ -107,11 +108,40 @@ def forecast_holdout(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
             for c, source in [("total_visits", "pred_visits"), ("total_transactions", "pred_transactions"), ("total_revenue", "pred_revenue")]:
                 work.loc[work["calendar_week"] == week, c] = week_preds[source].sum()
     cohort_df = pd.DataFrame(cohort_preds)
-    actual_agg = pd.read_csv(outdir / "aggregate_week_panel.csv", parse_dates=["calendar_week"])
-    weekly_pred = cohort_df.groupby("calendar_week", as_index=False).agg(pred_total_visits=("pred_visits", "sum"), pred_total_transactions=("pred_transactions", "sum"), pred_total_revenue=("pred_revenue", "sum")) if not cohort_df.empty else pd.DataFrame(columns=["calendar_week", "pred_total_visits", "pred_total_transactions", "pred_total_revenue"])
+    transformer_actual_path = outdir / "aggregate_week_panel_transformer.csv"
+    if not transformer_actual_path.exists():
+        transformer_actual_path = outdir / "aggregate_week_panel.csv"
+    actual_transformer = pd.read_csv(transformer_actual_path, parse_dates=["calendar_week"])
+    weekly_pred = (
+        cohort_df.groupby("calendar_week", as_index=False).agg(
+            pred_total_visits_transformer=("pred_visits", "sum"),
+            pred_total_transactions_transformer=("pred_transactions", "sum"),
+            pred_total_revenue_transformer=("pred_revenue", "sum"),
+        )
+        if not cohort_df.empty
+        else pd.DataFrame(columns=["calendar_week", "pred_total_visits_transformer", "pred_total_transactions_transformer", "pred_total_revenue_transformer"])
+    )
     weekly = pd.DataFrame({"calendar_week": [str(pd.Timestamp(w).date()) for w in splits.holdout_weeks]}).merge(weekly_pred, on="calendar_week", how="left").fillna(0.0)
-    actual_agg["calendar_week"] = actual_agg["calendar_week"].dt.date.astype(str)
-    weekly = weekly.merge(actual_agg.rename(columns={"total_visits": "actual_total_visits", "total_transactions": "actual_total_transactions", "total_revenue": "actual_total_revenue"})[["calendar_week", "actual_total_visits", "actual_total_transactions", "actual_total_revenue"]], on="calendar_week", how="left").fillna(0.0)
+    actual_transformer["calendar_week"] = actual_transformer["calendar_week"].dt.date.astype(str)
+    weekly = weekly.merge(
+        actual_transformer.rename(
+            columns={
+                "total_visits": "actual_total_visits_transformer",
+                "total_transactions": "actual_total_transactions_transformer",
+                "total_revenue": "actual_total_revenue_transformer",
+            }
+        )[["calendar_week", "actual_total_visits_transformer", "actual_total_transactions_transformer", "actual_total_revenue_transformer"]],
+        on="calendar_week",
+        how="left",
+    ).fillna(0.0)
+
+    evcm_weekly = forecast_evcm_early_purchase(config, splits)
+    evcm_weekly.to_csv(pred_dir / "holdout_weekly_predictions_evcm_early_purchase.csv", index=False)
+    weekly = weekly.merge(evcm_weekly, on="calendar_week", how="left").fillna(0.0)
+    for metric in ["visits", "transactions", "revenue"]:
+        weekly[f"pred_total_{metric}"] = weekly[f"pred_total_{metric}_transformer"] + weekly[f"pred_total_{metric}_evcm"]
+        weekly[f"actual_total_{metric}"] = weekly[f"actual_total_{metric}_transformer"] + weekly[f"actual_total_{metric}_evcm"]
+
     cohort_df.to_csv(pred_dir / "holdout_cohort_week_predictions.csv", index=False)
     weekly.to_csv(pred_dir / "holdout_weekly_predictions.csv", index=False)
     return weekly, cohort_df

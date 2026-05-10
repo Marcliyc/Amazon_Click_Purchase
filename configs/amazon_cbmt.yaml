@@ -54,3 +54,10 @@ model:
     revenue_consistency: 4.0
     visit_consistency: 1.0
     txn_consistency: 1.0
+
+evcm:
+  early_purchase_weeks: 4
+  enabled: true
+  n_sims: 300
+  ev_starts: 5
+  cm_starts: 5

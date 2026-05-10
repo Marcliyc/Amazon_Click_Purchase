@@ -12,6 +12,7 @@ from .config import save_config
 from .cohort_builder import build_and_save
 from .covariates import attach_covariates, build_cohort_covariates, numeric_feature_columns, CovariateScaler
 from .dataset import WindowedCohortDataset, merge_aggregate, temporal_splits
+from .evcm_segment import train_evcm_early_purchase
 from .losses import cbmt_loss
 from .model_cbmt import CBMTTransformer
 from .utils import ensure_dir, set_seed, write_json
@@ -21,10 +22,24 @@ def prepare_model_tables(config: dict) -> tuple[pd.DataFrame, list[str], object,
     outdir = Path(config["data"]["output_dir"])
     if not (outdir / "cohort_week_panel.csv").exists():
         build_and_save(config)
-    panel = pd.read_csv(outdir / "cohort_week_panel.csv", parse_dates=["cohort_week", "calendar_week"])
-    agg = pd.read_csv(outdir / "aggregate_week_panel.csv", parse_dates=["calendar_week"])
+    panel_path = outdir / "cohort_week_panel_transformer.csv"
+    agg_path = outdir / "aggregate_week_panel_transformer.csv"
+    cohorts_path = outdir / "customer_cohorts_transformer.csv"
+    if not panel_path.exists():
+        if (outdir / "customer_segments.csv").exists() and config.get("evcm", {}).get("enabled", True):
+            raise ValueError("No Transformer training customers remain after early-purchase EV/CM segmentation.")
+        panel_path = outdir / "cohort_week_panel.csv"
+        agg_path = outdir / "aggregate_week_panel.csv"
+        cohorts_path = outdir / "customer_cohorts.csv"
+    panel = pd.read_csv(panel_path, parse_dates=["cohort_week", "calendar_week"])
+    agg = pd.read_csv(agg_path, parse_dates=["calendar_week"])
     sessions = pd.read_csv(outdir / "cleaned_sessions.csv", parse_dates=["calendar_week"])
-    cohorts = pd.read_csv(outdir / "customer_cohorts.csv", parse_dates=["cohort_week"])
+    if (outdir / "customer_segments.csv").exists():
+        segments = pd.read_csv(outdir / "customer_segments.csv")
+        customer_col = config["data"]["customer_id_col"]
+        keep = set(segments.loc[segments["cbmt_segment"] == "transformer", customer_col])
+        sessions = sessions[sessions[customer_col].isin(keep)].copy()
+    cohorts = pd.read_csv(cohorts_path, parse_dates=["cohort_week"])
     cohort_features = build_cohort_covariates(sessions, cohorts, config)
     panel = merge_aggregate(attach_covariates(panel, cohort_features), agg)
     splits = temporal_splits(panel["calendar_week"].unique().tolist(), config["split"].get("val_weeks", 12), config["split"].get("holdout_weeks", 12))
@@ -88,6 +103,7 @@ def train_cbmt(config: dict) -> dict:
     joblib.dump({"covariate_scaler": cov_scaler, "feature_cols": feature_cols}, model_dir / "scalers.pkl")
     joblib.dump({"feature_cols": feature_cols}, model_dir / "encoders.pkl")
     save_config(config, model_dir / "config_used.yaml")
-    diag = {"best_val_loss": best, "device": str(device), "train_rows": len(train_ds), "val_rows": len(val_ds), "holdout_weeks": [str(w.date()) for w in splits.holdout_weeks]}
+    evcm_diag = train_evcm_early_purchase(config, splits)
+    diag = {"best_val_loss": best, "device": str(device), "train_rows": len(train_ds), "val_rows": len(val_ds), "holdout_weeks": [str(w.date()) for w in splits.holdout_weeks], "evcm_early_purchase": evcm_diag}
     write_json(diag, model_dir / "validation_metrics.json")
     return diag

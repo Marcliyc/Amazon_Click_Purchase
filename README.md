@@ -90,6 +90,16 @@ Outputs are written under `outputs/cbmt_amazon/`:
 
 The forecasting script performs rolling one-step-ahead holdout prediction and feeds predictions into later holdout histories rather than using future actual outcomes. By default it avoids oracle holdout cohorts; set `split.oracle_holdout_cohorts: true` only for diagnostic isolation of repeat behavior/payment forecasting.
 
+### Early first-purchase customers and EV/CM segment
+
+Customers whose first observed purchase occurs in the first `evcm.early_purchase_weeks` calendar weeks are treated as potentially left-censored rather than as a true new acquisition cohort. They are removed from the Transformer training panel and modeled with a no-covariate EV/CM segment. The Transformer is trained on the remaining customers, and holdout forecasts are reported for:
+
+- `*_transformer`: newly acquired and old cohorts outside the early-purchase segment
+- `*_evcm`: customers in the early first-purchase EV/CM segment
+- combined `pred_total_*` / `actual_total_*`: the sum of both segments
+
+The combined and segment-level metrics are written to `outputs/cbmt_amazon/predictions/holdout_metrics.json`.
+
 ### Increasing CBMT model size
 
 The Transformer capacity is controlled in `configs/amazon_cbmt.yaml` under `model:`. To make the model larger, increase these values together:

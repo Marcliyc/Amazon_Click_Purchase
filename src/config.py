@@ -24,6 +24,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "duration_agg": "max",
     },
     "split": {"val_weeks": 12, "holdout_weeks": 12, "week_start": "SUN", "oracle_holdout_cohorts": False},
+    "evcm": {"enabled": True, "early_purchase_weeks": 4, "n_sims": 300, "ev_starts": 5, "cm_starts": 5},
     "model": {
         "lookback_weeks": 20,
         "d_model": 128,

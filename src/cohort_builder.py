@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .data_preprocess import load_and_preprocess
+from .segments import identify_early_first_purchase_customers
 from .utils import ensure_dir, write_json
 
 
@@ -63,9 +64,37 @@ def build_and_save(config: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, 
     outdir = ensure_dir(config["data"]["output_dir"])
     sessions, diag = load_and_preprocess(config)
     panel, aggregate, cohorts = build_cohort_week_panel(sessions, config)
+    customer_col = config["data"]["customer_id_col"]
+    segments = identify_early_first_purchase_customers(sessions, config)
+    sessions_segmented = sessions.merge(segments[[customer_col, "cbmt_segment"]], on=customer_col, how="left")
+    transformer_sessions = sessions_segmented[sessions_segmented["cbmt_segment"] != "early_purchase_evcm"].drop(columns=["cbmt_segment"])
+    evcm_sessions = sessions_segmented[sessions_segmented["cbmt_segment"] == "early_purchase_evcm"].drop(columns=["cbmt_segment"])
+
     sessions.to_csv(outdir / "cleaned_sessions.csv", index=False)
+    segments.to_csv(outdir / "customer_segments.csv", index=False)
     cohorts.to_csv(outdir / "customer_cohorts.csv", index=False)
     panel.to_csv(outdir / "cohort_week_panel.csv", index=False)
     aggregate.to_csv(outdir / "aggregate_week_panel.csv", index=False)
-    write_json(diag | {"panel_rows": int(len(panel)), "aggregate_rows": int(len(aggregate))}, outdir / "preprocess_diagnostics.json")
+
+    if len(transformer_sessions):
+        t_panel, t_aggregate, t_cohorts = build_cohort_week_panel(transformer_sessions, config)
+        t_cohorts.to_csv(outdir / "customer_cohorts_transformer.csv", index=False)
+        t_panel.to_csv(outdir / "cohort_week_panel_transformer.csv", index=False)
+        t_aggregate.to_csv(outdir / "aggregate_week_panel_transformer.csv", index=False)
+    if len(evcm_sessions):
+        e_panel, e_aggregate, e_cohorts = build_cohort_week_panel(evcm_sessions, config)
+        e_cohorts.to_csv(outdir / "customer_cohorts_evcm_early_purchase.csv", index=False)
+        e_panel.to_csv(outdir / "cohort_week_panel_evcm_early_purchase.csv", index=False)
+        e_aggregate.to_csv(outdir / "aggregate_week_panel_evcm_early_purchase.csv", index=False)
+
+    write_json(
+        diag
+        | {
+            "panel_rows": int(len(panel)),
+            "aggregate_rows": int(len(aggregate)),
+            "transformer_customers": int((segments["cbmt_segment"] == "transformer").sum()),
+            "early_purchase_evcm_customers": int((segments["cbmt_segment"] == "early_purchase_evcm").sum()),
+        },
+        outdir / "preprocess_diagnostics.json",
+    )
     return panel, aggregate, cohorts

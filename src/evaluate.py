@@ -51,10 +51,19 @@ def evaluate_outputs(output_dir: str | Path) -> dict:
     outdir = Path(output_dir)
     weekly = pd.read_csv(outdir / "predictions" / "holdout_weekly_predictions.csv")
     pairs = {
-        "total_visits": ("actual_total_visits", "pred_total_visits"),
-        "total_transactions": ("actual_total_transactions", "pred_total_transactions"),
-        "total_revenue": ("actual_total_revenue", "pred_total_revenue"),
+        "combined_total_visits": ("actual_total_visits", "pred_total_visits"),
+        "combined_total_transactions": ("actual_total_transactions", "pred_total_transactions"),
+        "combined_total_revenue": ("actual_total_revenue", "pred_total_revenue"),
     }
+    if "pred_total_visits_transformer" in weekly.columns:
+        pairs |= {
+            "transformer_total_visits": ("actual_total_visits_transformer", "pred_total_visits_transformer"),
+            "transformer_total_transactions": ("actual_total_transactions_transformer", "pred_total_transactions_transformer"),
+            "transformer_total_revenue": ("actual_total_revenue_transformer", "pred_total_revenue_transformer"),
+            "evcm_early_purchase_total_visits": ("actual_total_visits_evcm", "pred_total_visits_evcm"),
+            "evcm_early_purchase_total_transactions": ("actual_total_transactions_evcm", "pred_total_transactions_evcm"),
+            "evcm_early_purchase_total_revenue": ("actual_total_revenue_evcm", "pred_total_revenue_evcm"),
+        }
     metrics = metrics_for_frame(weekly, pairs)
     (outdir / "predictions").mkdir(parents=True, exist_ok=True)
     with open(outdir / "predictions" / "holdout_metrics.json", "w", encoding="utf-8") as f:
