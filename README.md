@@ -89,3 +89,20 @@ Outputs are written under `outputs/cbmt_amazon/`:
 - plots for holdout actual-vs-predicted totals, cohort revenue heatmaps, tenure error, and segment-style behavior interpretation
 
 The forecasting script performs rolling one-step-ahead holdout prediction and feeds predictions into later holdout histories rather than using future actual outcomes. By default it avoids oracle holdout cohorts; set `split.oracle_holdout_cohorts: true` only for diagnostic isolation of repeat behavior/payment forecasting.
+
+### Increasing CBMT model size
+
+The Transformer capacity is controlled in `configs/amazon_cbmt.yaml` under `model:`. To make the model larger, increase these values together:
+
+```yaml
+model:
+  lookback_weeks: 26      # longer behavioral sequence
+  d_model: 256            # Transformer hidden width
+  n_heads: 8              # must divide d_model
+  n_encoder_layers: 4     # deeper temporal encoder
+  head_hidden_dim: 256    # wider task-specific MLP heads
+  dropout: 0.15           # consider more dropout for larger models
+  batch_size: 256         # lower this if GPU/CPU memory is tight
+```
+
+If holdout visits are unexpectedly zero or near-zero, check `outputs/cbmt_amazon/predictions/holdout_cohort_week_predictions.csv`. The pipeline keeps raw `cohort_size`, visit, transaction, and aggregate target columns unscaled for consistency math and forecast aggregation, while using derived feature proxies such as `log1p_cohort_size` inside the model.

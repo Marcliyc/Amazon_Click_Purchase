@@ -21,6 +21,9 @@ def add_time_covariates(panel: pd.DataFrame) -> pd.DataFrame:
     out["time_trend_sq"] = trend**2
     out["tenure_week_sq"] = out["tenure_week"].astype(float) ** 2
     out["log1p_tenure_week"] = np.log1p(out["tenure_week"].astype(float))
+    if "cohort_size" in out.columns:
+        out["log1p_cohort_size"] = np.log1p(out["cohort_size"].astype(float).clip(lower=0))
+        out["sqrt_cohort_size"] = np.sqrt(out["cohort_size"].astype(float).clip(lower=0))
     out["acquisition_month"] = c.dt.month.astype(int)
     out["acquisition_weekofyear"] = c.dt.isocalendar().week.astype(int)
     out["is_thanksgiving_week"] = ((out["month"] == 11) & (w.dt.day.between(22, 30))).astype(int)
@@ -65,9 +68,26 @@ def attach_covariates(panel: pd.DataFrame, cohort_features: pd.DataFrame | None 
 
 
 def numeric_feature_columns(df: pd.DataFrame) -> list[str]:
+    # Keep raw semantic columns unscaled because they are used as targets and in
+    # visit/transaction/revenue consistency math during training and forecasting.
+    # Scaled feature proxies such as log1p_cohort_size and log1p_tenure_week are
+    # included instead.
     exclude = {
-        "cohort_week", "calendar_week", "visits", "transactions", "revenue", "visits_per_customer",
-        "transactions_per_customer", "avg_payment", "revenue_per_customer", "total_units",
+        "cohort_week",
+        "calendar_week",
+        "cohort_size",
+        "tenure_week",
+        "visits",
+        "transactions",
+        "revenue",
+        "visits_per_customer",
+        "transactions_per_customer",
+        "avg_payment",
+        "revenue_per_customer",
+        "total_visits",
+        "total_transactions",
+        "total_revenue",
+        "total_units",
     }
     return [c for c in df.columns if c not in exclude and pd.api.types.is_numeric_dtype(df[c])]
 
