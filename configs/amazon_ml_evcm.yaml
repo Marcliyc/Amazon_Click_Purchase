@@ -1,0 +1,23 @@
+data:
+  input_path: data/amazon_sessions.csv
+  visit_unit: session
+  cutoff: null
+  calibration_fraction: 0.8
+  domain_col: domain_name
+  amazon_domain_value: null
+initialization:
+  param_ev_path: reports/evcm/params_ev.csv
+  param_cm_path: reports/evcm/params_cm.csv
+covariates:
+  use_covariates: true
+  covariate_head: linear
+  standardize_covariates: true
+  rare_min_count: 10
+fit:
+  seed: 123
+  learning_rate: 0.01
+  num_steps: 1000
+  lambda_beta: 0.01
+  w_init_scale: 0.0
+outputs:
+  workdir: outputs/amazon_ml_evcm
