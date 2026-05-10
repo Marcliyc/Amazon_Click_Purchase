@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
-import torch
 
-from .dataset import WindowedCohortDataset
-from .losses import implied_cohort_counts, implied_cohort_revenue
-from .model_cbmt import CBMTTransformer
-from .train import prepare_model_tables
 from .utils import ensure_dir
 
 
-def _load_model(model_dir: Path, device: torch.device):
+def _load_model(model_dir: Path, device: Any):
+    import torch
+
+    from .model_cbmt import CBMTTransformer
+
     ckpt = torch.load(model_dir / "cbmt_best.pt", map_location=device)
     cfg = ckpt["config"]
     model = CBMTTransformer(input_dim=ckpt["input_dim"], **{k: cfg["model"][k] for k in ["d_model", "n_heads", "n_encoder_layers", "dropout", "head_hidden_dim"] if k in cfg["model"]})
@@ -22,23 +22,47 @@ def _load_model(model_dir: Path, device: torch.device):
 
 
 def add_predicted_cold_cohorts(panel: pd.DataFrame, holdout_weeks: list[pd.Timestamp]) -> pd.DataFrame:
+    """Add non-oracle future cohorts for every remaining holdout week.
+
+    Each holdout week introduces one predicted new cohort.  A cohort born in the
+    first holdout week must also have rows for the second, third, etc. holdout
+    weeks so rolling forecasts can feed its predicted tenure-0 behavior into
+    tenure-1/2 histories and include it in later aggregate totals.
+    """
     if not holdout_weeks:
         return panel
+
+    holdout_weeks = sorted(pd.to_datetime(pd.Series(holdout_weeks)).drop_duplicates())
     existing_cols = panel.columns
+    existing_pairs = set(zip(pd.to_datetime(panel["cohort_week"]), pd.to_datetime(panel["calendar_week"])))
     pre = panel[panel["calendar_week"] < holdout_weeks[0]]
     new_sizes = pre.loc[pre["cohort_week"] == pre["calendar_week"], "cohort_size"].tail(8)
     pred_size = float(max(new_sizes.mean() if len(new_sizes) else 1.0, 1.0))
+
     rows = []
-    for w in holdout_weeks:
-        if ((panel["cohort_week"] == w) & (panel["calendar_week"] == w)).any():
-            continue
-        r = {c: 0.0 for c in existing_cols}
-        r.update({"cohort_week": w, "calendar_week": w, "cohort_size": pred_size, "tenure_week": 0})
-        rows.append(r)
+    for birth_week in holdout_weeks:
+        for calendar_week in holdout_weeks:
+            if calendar_week < birth_week or (birth_week, calendar_week) in existing_pairs:
+                continue
+            r = {c: 0.0 for c in existing_cols}
+            tenure_week = int((calendar_week - birth_week).days // 7)
+            r.update({
+                "cohort_week": birth_week,
+                "calendar_week": calendar_week,
+                "cohort_size": pred_size,
+                "tenure_week": tenure_week,
+            })
+            rows.append(r)
     return pd.concat([panel, pd.DataFrame(rows)], ignore_index=True) if rows else panel
 
 
 def forecast_holdout(config: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    import torch
+
+    from .dataset import WindowedCohortDataset
+    from .losses import implied_cohort_counts, implied_cohort_revenue
+    from .train import prepare_model_tables
+
     outdir = Path(config["data"]["output_dir"])
     pred_dir = ensure_dir(outdir / "predictions")
     panel, feature_cols, splits, _ = prepare_model_tables(config)
