@@ -41,3 +41,78 @@ python -m src.evcm_pipeline \
   --x64 \
   --seed 123
 ```
+
+## CBMT-style Amazon weekly cohort forecasting
+
+This repository also includes a Customer-Based Multi-Task Transformer (CBMT)-style pipeline for forecasting Amazon cohort-week visits, transactions, and revenue/payment volume.
+
+### Configure columns
+
+Edit `configs/amazon_cbmt.yaml` to map your raw file and columns:
+
+```yaml
+data:
+  raw_path: data/amazon_sessions.csv
+  customer_id_col: machine_id
+  session_id_col: site_session_id
+  date_col: event_date
+  transaction_flag_col: tran_flg
+  payment_col: prod_totprice   # use totalprice if that is your total product price field
+  covariate_cols:
+    - household_income
+    - household_size
+    - census_region
+```
+
+The default cohort definition is `first_visit`, which supports visit forecasting. Set `data.cohort_definition: first_purchase` to cohort customers by their first transaction instead.
+
+### Run the CBMT pipeline
+
+```bash
+python scripts/01_build_weekly_cohorts.py --config configs/amazon_cbmt.yaml
+python scripts/02_train_cbmt.py --config configs/amazon_cbmt.yaml
+python scripts/03_forecast_holdout.py --config configs/amazon_cbmt.yaml
+python scripts/04_evaluate_and_plot.py --config configs/amazon_cbmt.yaml
+```
+
+Or run end to end:
+
+```bash
+python -m src.run_all --config configs/amazon_cbmt.yaml
+```
+
+Outputs are written under `outputs/cbmt_amazon/`:
+
+- `cleaned_sessions.csv`, `customer_cohorts.csv`, `cohort_week_panel.csv`, and `aggregate_week_panel.csv`
+- `models/cbmt_best.pt`, `models/scalers.pkl`, `models/encoders.pkl`, `training_curve.csv`, and validation diagnostics
+- `predictions/holdout_weekly_predictions.csv`, `predictions/holdout_cohort_week_predictions.csv`, and `predictions/holdout_metrics.json`
+- plots for holdout actual-vs-predicted totals, cohort revenue heatmaps, tenure error, and segment-style behavior interpretation
+
+The forecasting script performs rolling one-step-ahead holdout prediction and feeds predictions into later holdout histories rather than using future actual outcomes. By default it avoids oracle holdout cohorts; set `split.oracle_holdout_cohorts: true` only for diagnostic isolation of repeat behavior/payment forecasting.
+
+### Early first-purchase customers and EV/CM segment
+
+Customers whose first observed purchase occurs in the first `evcm.early_purchase_weeks` calendar weeks are treated as potentially left-censored rather than as a true new acquisition cohort. They are removed from the Transformer training panel and modeled with a no-covariate EV/CM segment. The Transformer is trained on the remaining customers, and holdout forecasts are reported for:
+
+- `*_transformer`: newly acquired and old cohorts outside the early-purchase segment
+- `*_evcm`: customers in the early first-purchase EV/CM segment
+- combined `pred_total_*` / `actual_total_*`: the sum of both segments
+
+The combined and segment-level metrics are written to `outputs/cbmt_amazon/predictions/holdout_metrics.json`.
+
+### Increasing CBMT model size
+
+The Transformer capacity is controlled in `configs/amazon_cbmt.yaml` under `model:`. To make the model larger, increase these values together:
+
+```yaml
+model:
+  lookback_weeks: 26      # longer behavioral sequence
+  d_model: 256            # Transformer hidden width
+  n_heads: 8              # must divide d_model
+  n_encoder_layers: 4     # deeper temporal encoder
+  head_hidden_dim: 256    # wider task-specific MLP heads
+  dropout: 0.15           # consider more dropout for larger models
+  batch_size: 256         # lower this if GPU/CPU memory is tight
+```
+
+If holdout visits are unexpectedly zero or near-zero, check `outputs/cbmt_amazon/predictions/holdout_cohort_week_predictions.csv`. The pipeline keeps raw `cohort_size`, visit, transaction, and aggregate target columns unscaled for consistency math and forecast aggregation, while using derived feature proxies such as `log1p_cohort_size` inside the model.
